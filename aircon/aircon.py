@@ -15,7 +15,7 @@ from . import control_value
 from .config import Config, Encryption
 from .error import Error
 from .properties import (AcProperties, AirFlow, AirFlowState, Economy, FanSpeed, FastColdHeat,
-                         FglProperties, FglBProperties, HumidifierProperties, Properties, Power,
+                         Dimmer, FglProperties, FglBProperties, HumidifierProperties, Properties, Power,
                          AcWorkMode, Quiet, TemperatureUnit, SleepMode)
 
 
@@ -322,6 +322,84 @@ class AcDevice(Device):
 
   def get_sleep(self) -> SleepMode:
     self.get_property('t_sleep')
+
+  def queue_settings(self, settings: Dict[str, Any]) -> None:
+    """Queue several settings as one device command."""
+    control = self.get_property('t_control_value')
+    if control:
+      control = control_value.clear_up_change_flags(control)
+    else:
+      control = 0
+      current_fields = (
+          (control_value.set_power, 't_power'),
+          (control_value.set_fan_speed, 't_fan_speed'),
+          (control_value.set_work_mode, 't_work_mode'),
+          (control_value.set_heat_cold, 't_temp_heatcold'),
+          (control_value.set_eco, 't_eco'),
+          (control_value.set_temp, 't_temp'),
+          (control_value.set_fan_power, 't_fan_power'),
+          (control_value.set_fan_lr, 't_fan_leftright'),
+          (control_value.set_fan_mute, 't_fan_mute'),
+          (control_value.set_temptype, 't_temptype'),
+      )
+      for setter, name in current_fields:
+        value = self.get_property(name)
+        if name == 't_temp' and self.is_fahrenheit:
+          value = round((value - 32) * 5 / 9)
+        control = setter(control, value)
+
+    control_fields = {
+        't_power': (control_value.set_power, Power),
+        't_work_mode': (control_value.set_work_mode, AcWorkMode),
+        't_temp': (control_value.set_temp, int),
+        't_fan_speed': (control_value.set_fan_speed, FanSpeed),
+        't_fan_power': (control_value.set_fan_power, AirFlow),
+        't_fan_leftright': (control_value.set_fan_lr, AirFlow),
+    }
+    separate_fields = {'t_sleep': SleepMode, 't_backlight': Dimmer}
+    updates = {}
+    state_updates = {}
+
+    for name, value in settings.items():
+      if name in control_fields:
+        setter, data_type = control_fields[name]
+        if issubclass(data_type, enum.Enum):
+          typed_value = data_type[str(value).upper()]
+          device_value = typed_value
+        elif name == 't_temp':
+          typed_value = round(float(value))
+          device_value = (round((float(value) - 32) * 5 / 9)
+                          if self.is_fahrenheit else typed_value)
+        else:
+          typed_value = data_type(value)
+          device_value = typed_value
+        control = setter(control, device_value)
+        state_updates[name] = typed_value
+      elif name in separate_fields:
+        typed_value = separate_fields[name][str(value).upper()]
+        updates[name] = typed_value
+        state_updates[name] = typed_value
+      else:
+        raise Error('Unsupported combined setting "{}".'.format(name))
+
+    updates = {'t_control_value': control, **updates}
+    command = {
+        'properties': [{
+            'property': {
+                'base_type': self._properties.get_base_type(name),
+                'name': name,
+                'value': value.value if isinstance(value, enum.Enum) else value,
+                'id': ''.join(random.choices(string.ascii_letters + string.digits, k=8)),
+            }
+        } for name, value in updates.items()]
+    }
+
+    def update_properties():
+      for name, value in state_updates.items():
+        self.update_property(name, value)
+
+    self.commands_queue.put_nowait(Command(10, time.time_ns(), command, update_properties))
+    self._queue_listener()
 
   def set_work_mode(self, setting: AcWorkMode) -> None:
     control = self.get_property('t_control_value')

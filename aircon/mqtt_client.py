@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import fields
 import enum
 import logging
@@ -9,10 +10,25 @@ from .properties import AcWorkMode, FglOperationMode
 
 class MqttClient(mqtt.Client):
 
+  _SETTINGS_DEBOUNCE_SECONDS = 0.2
+  _BATCHABLE_SETTINGS = {
+      't_backlight',
+      't_fan_leftright',
+      't_fan_power',
+      't_fan_speed',
+      't_power',
+      't_sleep',
+      't_temp',
+      't_work_mode',
+  }
+
   def __init__(self, client_id: str, mqtt_topics: dict, devices: [Device]):
     super().__init__(client_id=client_id, clean_session=True)
     self._mqtt_topics = mqtt_topics
     self._devices = devices
+    self._event_loop = asyncio.get_running_loop()
+    self._pending_settings = {}
+    self._settings_handles = {}
 
     self.on_connect = self.mqtt_on_connect
     self.on_message = self.mqtt_on_message
@@ -50,10 +66,43 @@ class MqttClient(mqtt.Client):
       chosen_device = device
 
     try:
-      chosen_device.queue_command(prop_name, payload.upper())
+      if hasattr(chosen_device, 'queue_settings') and prop_name in self._BATCHABLE_SETTINGS:
+        self._event_loop.call_soon_threadsafe(
+            self._debounce_setting, chosen_device, prop_name, payload.upper())
+      else:
+        self._event_loop.call_soon_threadsafe(
+            self._queue_command, chosen_device, prop_name, payload.upper())
     except Exception:
-      logging.exception('Failed to parse value {} for property {}'.format(
-          payload.upper(), prop_name))
+      logging.exception('Failed to parse value %s for property %s', payload, prop_name)
+
+  def _debounce_setting(self, device: Device, prop_name: str, value) -> None:
+    updates = {prop_name: value}
+    if prop_name == 't_work_mode':
+      updates = ({'t_power': 'OFF'} if value == 'OFF'
+                 else {'t_power': 'ON', 't_work_mode': value})
+
+    pending = self._pending_settings.setdefault(device.mac_address, {})
+    pending.update(updates)
+    handle = self._settings_handles.pop(device.mac_address, None)
+    if handle:
+      handle.cancel()
+    self._settings_handles[device.mac_address] = self._event_loop.call_later(
+        self._SETTINGS_DEBOUNCE_SECONDS, self._flush_settings, device)
+
+  def _flush_settings(self, device: Device) -> None:
+    self._settings_handles.pop(device.mac_address, None)
+    settings = self._pending_settings.pop(device.mac_address)
+    try:
+      device.queue_settings(settings)
+    except Exception:
+      logging.exception('Failed to queue combined settings for %s', device.mac_address)
+
+  @staticmethod
+  def _queue_command(device: Device, prop_name: str, value) -> None:
+    try:
+      device.queue_command(prop_name, value)
+    except Exception:
+      logging.exception('Failed to queue value %s for property %s', value, prop_name)
 
   def mqtt_on_subscribe(self, payload: bytes):
     # The last segment in the space delimited string is the topic.
