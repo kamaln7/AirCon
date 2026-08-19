@@ -222,7 +222,9 @@ async def run(parsed_args):
                                                                      topics['fan_speed'])
         config['fan_mode_state_topic'] = mqtt_topics['pub'].format(device.mac_address,
                                                                    topics['fan_speed'])
-        config['fan_modes'] = device.fan_modes
+        config['fan_modes'] = [mode.title() for mode in device.fan_modes]
+        config['fan_mode_command_template'] = "{{ value | lower }}"
+        config['fan_mode_state_template'] = "{{ value | title }}"
       if 'work_mode' in topics:
         config['mode_command_topic'] = mqtt_topics['sub'].format(device.mac_address,
                                                                  topics['work_mode'])
@@ -235,6 +237,12 @@ async def run(parsed_args):
         config['swing_mode_state_topic'] = mqtt_topics['pub'].format(device.mac_address,
                                                                      topics['swing_mode'])
         config['swing_modes'] = ['on', 'off']
+      if 'swing_horizontal_mode' in topics:
+        config['swing_horizontal_mode_command_topic'] = mqtt_topics['sub'].format(
+            device.mac_address, topics['swing_horizontal_mode'])
+        config['swing_horizontal_mode_state_topic'] = mqtt_topics['pub'].format(
+            device.mac_address, topics['swing_horizontal_mode'])
+        config['swing_horizontal_modes'] = ['on', 'off']
       if 'temp' in topics:
         config['temperature_command_topic'] = mqtt_topics['sub'].format(
             device.mac_address, topics['temp'])
@@ -242,6 +250,18 @@ async def run(parsed_args):
                                                                       topics['temp'])
         config['max_temp'] = '86' if device.is_fahrenheit else '30'
         config['min_temp'] = '61' if device.is_fahrenheit else '16'
+      if 'sleep' in topics:
+        config['preset_mode_command_topic'] = mqtt_topics['sub'].format(
+            device.mac_address, topics['sleep'])
+        config['preset_mode_state_topic'] = mqtt_topics['pub'].format(
+            device.mac_address, topics['sleep'])
+        config['preset_modes'] = ['Sleep 1', 'Sleep 2', 'Sleep 3', 'Sleep 4']
+        config['preset_mode_command_template'] = (
+            "{{ {'none': 'stop', 'Sleep 1': 'one', 'Sleep 2': 'two', "
+            "'Sleep 3': 'three', 'Sleep 4': 'four'}[value] }}")
+        config['preset_mode_value_template'] = (
+            "{{ {'stop': 'none', 'one': 'Sleep 1', 'two': 'Sleep 2', "
+            "'three': 'Sleep 3', 'four': 'Sleep 4'}.get(value, value) }}")
       mqtt_client.publish(mqtt_topics['discovery'].format(device.mac_address),
                           payload=json.dumps(config),
                           retain=True)

@@ -31,7 +31,7 @@ class MqttClient(mqtt.Client):
           self.mqtt_publish_update(device.mac_address,
                                    prop_name,
                                    device.get_property(prop_name),
-                                   retain=False)
+                                   retain=True)
 
   def mqtt_on_message(self, client: mqtt.Client, userdata, message: mqtt.MQTTMessage):
     logging.info('MQTT message Topic: {}, Payload {}'.format(message.topic, message.payload))
@@ -71,13 +71,13 @@ class MqttClient(mqtt.Client):
     self.mqtt_publish_update(chosen_device.mac_address,
                              prop_name,
                              chosen_device.get_property(prop_name),
-                             retain=False)
+                             retain=True)
 
   def mqtt_publish_update(self,
                           mac_address: str,
                           property_name: str,
                           value,
-                          retain: bool = False) -> None:
+                          retain: bool = True) -> None:
     if isinstance(value, enum.Enum):
       payload = 'fan_only' if (value is AcWorkMode.FAN or
                                value is FglOperationMode.FAN) else value.name.lower()
