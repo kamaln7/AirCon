@@ -123,6 +123,7 @@ class AcDeviceSettingsTest(unittest.TestCase):
     return command, properties
 
   def test_partial_batch_preserves_fahrenheit_temperature(self):
+    self.device.update_property('t_control_value', control_value.set_temp(0, 22))
     _, properties = self.pop_command({'t_fan_speed': 'MEDIUM'})
     control = properties['t_control_value']
 
@@ -130,6 +131,7 @@ class AcDeviceSettingsTest(unittest.TestCase):
     self.assertEqual(FanSpeed.MEDIUM, control_value.get_fan_speed(control))
 
   def test_combined_command_updates_control_and_separate_properties(self):
+    self.device.update_property('t_control_value', control_value.set_temp(0, 22))
     command, properties = self.pop_command({
         't_power': 'ON',
         't_work_mode': 'COOL',
@@ -149,6 +151,27 @@ class AcDeviceSettingsTest(unittest.TestCase):
     self.assertEqual(72, self.device.get_property('t_temp'))
     self.assertEqual(SleepMode.ONE, self.device.get_property('t_sleep'))
     self.assertEqual(Dimmer.ON, self.device.get_property('t_backlight'))
+
+  def test_batch_without_control_value_uses_individual_properties(self):
+    command, properties = self.pop_command({
+        't_power': 'ON',
+        't_work_mode': 'COOL',
+        't_temp': '71.6',
+        't_fan_speed': 'MEDIUM',
+        't_sleep': 'ONE',
+        't_backlight': 'ON',
+    })
+
+    self.assertNotIn('t_control_value', properties)
+    self.assertEqual(Power.ON.value, properties['t_power'])
+    self.assertEqual(AcWorkMode.COOL.value, properties['t_work_mode'])
+    self.assertEqual(72, properties['t_temp'])
+    self.assertEqual(FanSpeed.MEDIUM.value, properties['t_fan_speed'])
+    self.assertEqual(SleepMode.ONE.value, properties['t_sleep'])
+    self.assertEqual(Dimmer.ON.value, properties['t_backlight'])
+
+    command.updater()
+    self.assertEqual(72, self.device.get_property('t_temp'))
 
 
 if __name__ == '__main__':
