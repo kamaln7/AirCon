@@ -158,10 +158,11 @@ async def setup_and_run_http_server(parsed_args, devices: [Device]):
 
 
 async def mqtt_loop(mqtt_client: MqttClient):
-  _MQTT_LOOP_TIMEOUT = 1
-  while True:
-    mqtt_client.loop()
-    await asyncio.sleep(_MQTT_LOOP_TIMEOUT)
+  mqtt_client.loop_start()
+  try:
+    await asyncio.Future()
+  finally:
+    mqtt_client.loop_stop()
 
 
 async def run(parsed_args):
