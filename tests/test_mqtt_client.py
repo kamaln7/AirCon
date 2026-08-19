@@ -15,6 +15,14 @@ class FakeDevice:
   def __init__(self):
     self.commands = []
     self.settings = []
+    self.power = Power.OFF
+    self.work_mode = AcWorkMode.COOL
+
+  def get_power(self):
+    return self.power
+
+  def get_work_mode(self):
+    return self.work_mode
 
   def queue_command(self, name, value):
     self.commands.append((name, value))
@@ -52,6 +60,7 @@ class MqttClientTest(unittest.IsolatedAsyncioTestCase):
     self.client = MqttClient('test', topics, [self.device])
 
   async def test_push_callbacks_batch_rapid_settings(self):
+    self.device.power = Power.ON
     def publish():
       self.client.mqtt_on_message(None, None, Message('t_work_mode', 'cool'))
       self.client.mqtt_on_message(None, None, Message('t_temp', '71.6'))
@@ -65,11 +74,26 @@ class MqttClientTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual([], self.device.settings)
     await asyncio.sleep(0.2)
     self.assertEqual([{
-        't_power': 'ON',
         't_work_mode': 'COOL',
         't_temp': '71.6',
         't_fan_speed': 'AUTO',
     }], self.device.settings)
+
+  async def test_power_and_mode_fan_changes_are_sequenced(self):
+    self.client._POWER_ON_DELAY_SECONDS = 0.05
+    self.client._MODE_FAN_RETRY_SECONDS = 0.05
+    self.device.work_mode = AcWorkMode.HEAT
+    self.client.mqtt_on_message(None, None, Message('t_work_mode', 'cool'))
+    self.client.mqtt_on_message(None, None, Message('t_temp', '71.6'))
+    self.client.mqtt_on_message(None, None, Message('t_fan_speed', 'low'))
+
+    await asyncio.sleep(0.4)
+    remaining = {
+        't_work_mode': 'COOL',
+        't_temp': '71.6',
+        't_fan_speed': 'LOW',
+    }
+    self.assertEqual([{'t_power': 'ON'}, remaining, remaining], self.device.settings)
 
   async def test_isolated_setting_stays_brief(self):
     self.client.mqtt_on_message(None, None, Message('t_fan_speed', 'medium'))
@@ -78,6 +102,17 @@ class MqttClientTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual([], self.device.settings)
     await asyncio.sleep(0.2)
     self.assertEqual([{'t_fan_speed': 'MEDIUM'}], self.device.settings)
+
+  async def test_work_mode_does_not_redundantly_power_on_running_device(self):
+    self.device.power = Power.ON
+    self.client.mqtt_on_message(None, None, Message('t_work_mode', 'heat'))
+    self.client.mqtt_on_message(None, None, Message('t_temp', '75.2'))
+
+    await asyncio.sleep(0.3)
+    self.assertEqual([{
+        't_work_mode': 'HEAT',
+        't_temp': '75.2',
+    }], self.device.settings)
 
   async def test_network_loop_is_push_driven_and_stops_on_cancel(self):
     network_loop = FakeNetworkLoop()
@@ -152,26 +187,56 @@ class AcDeviceSettingsTest(unittest.TestCase):
     self.assertEqual(SleepMode.ONE, self.device.get_property('t_sleep'))
     self.assertEqual(Dimmer.ON, self.device.get_property('t_backlight'))
 
-  def test_batch_without_control_value_uses_individual_properties(self):
-    command, properties = self.pop_command({
-        't_power': 'ON',
-        't_work_mode': 'COOL',
+  def test_batch_without_packed_control_uses_individual_commands(self):
+    self.device.queue_settings({
         't_temp': '71.6',
         't_fan_speed': 'MEDIUM',
         't_sleep': 'ONE',
         't_backlight': 'ON',
+        't_power': 'ON',
+        't_work_mode': 'COOL',
     })
 
-    self.assertNotIn('t_control_value', properties)
-    self.assertEqual(Power.ON.value, properties['t_power'])
-    self.assertEqual(AcWorkMode.COOL.value, properties['t_work_mode'])
-    self.assertEqual(72, properties['t_temp'])
-    self.assertEqual(FanSpeed.MEDIUM.value, properties['t_fan_speed'])
-    self.assertEqual(SleepMode.ONE.value, properties['t_sleep'])
-    self.assertEqual(Dimmer.ON.value, properties['t_backlight'])
+    commands = [self.device.commands_queue.get_nowait() for _ in range(6)]
+    properties = [{
+        item['property']['name']: item['property']['value']
+        for item in command.command['properties']
+    } for command in commands]
+    self.assertEqual([
+        {'t_power': Power.ON.value},
+        {'t_work_mode': AcWorkMode.COOL.value},
+        {'t_temp': 72},
+        {'t_fan_speed': FanSpeed.MEDIUM.value},
+        {'t_sleep': SleepMode.ONE.value},
+        {'t_backlight': Dimmer.ON.value},
+    ], properties)
 
-    command.updater()
+    for command in commands:
+      command.updater()
     self.assertEqual(72, self.device.get_property('t_temp'))
+
+  def test_batch_uses_native_setmulti_value(self):
+    self.device.update_property('t_setmulti_value', 0)
+    self.device.queue_settings({
+        't_power': 'ON',
+        't_work_mode': 'COOL',
+        't_temp': '69.8',
+        't_fan_speed': 'HIGH',
+        't_fan_power': 'ON',
+        't_fan_leftright': 'OFF',
+        't_sleep': 'ONE',
+    })
+
+    commands = [self.device.commands_queue.get_nowait() for _ in range(3)]
+    properties = [{
+        item['property']['name']: item['property']['value']
+        for item in command.command['properties']
+    } for command in commands]
+    self.assertEqual([
+        {'t_power': Power.ON.value},
+        {'t_setmulti_value': 0x014682},
+        {'t_sleep': SleepMode.ONE.value},
+    ], properties)
 
 
 if __name__ == '__main__':

@@ -324,7 +324,7 @@ class AcDevice(Device):
     self.get_property('t_sleep')
 
   def queue_settings(self, settings: Dict[str, Any]) -> None:
-    """Queue several settings as one device command."""
+    """Queue rapid settings using the device's packed command when available."""
     control = self.get_property('t_control_value')
     if control:
       control = control_value.clear_up_change_flags(control)
@@ -365,22 +365,57 @@ class AcDevice(Device):
 
     if control:
       updates = {'t_control_value': control, **updates}
-    command = {
-        'properties': [{
-            'property': {
-                'base_type': self._properties.get_base_type(name),
-                'name': name,
-                'value': value.value if isinstance(value, enum.Enum) else value,
-                'id': ''.join(random.choices(string.ascii_letters + string.digits, k=8)),
-            }
-        } for name, value in updates.items()]
-    }
+    packed_names = [name for name in (
+        't_work_mode', 't_temp', 't_fan_speed', 't_fan_power', 't_fan_leftright'
+    ) if name in state_updates]
+    if not control and self.get_property('t_setmulti_value') is not None and len(packed_names) > 1:
+      work_mode = state_updates.get('t_work_mode', self.get_property('t_work_mode'))
+      temp = state_updates.get('t_temp', self.get_property('t_temp'))
+      fan_speed = state_updates.get('t_fan_speed', self.get_property('t_fan_speed'))
+      fan_power = state_updates.get('t_fan_power', self.get_property('t_fan_power'))
+      fan_lr = state_updates.get('t_fan_leftright', self.get_property('t_fan_leftright'))
+      packed = (fan_lr.value << 20 | fan_power.value << 16 | temp << 8 |
+                fan_speed.value << 4 | work_mode.value)
+      for name in packed_names:
+        updates.pop(name)
+      updates['t_setmulti_value'] = packed
+      state_updates['t_setmulti_value'] = packed
 
-    def update_properties():
-      for name, value in state_updates.items():
-        self.update_property(name, value)
+    if control:
+      groups = [(updates, state_updates)]
+    else:
+      groups = []
+      names = ([name for name in ('t_power', 't_setmulti_value', 't_work_mode')
+                if name in updates] +
+               [name for name in updates
+                if name not in ('t_power', 't_setmulti_value', 't_work_mode')])
+      for name in names:
+        value = updates[name]
+        update_names = packed_names if name == 't_setmulti_value' else [name]
+        group_state_updates = {
+            update_name: state_updates[update_name] for update_name in update_names
+        }
+        if name == 't_setmulti_value':
+          group_state_updates[name] = value
+        groups.append(({name: value}, group_state_updates))
 
-    self.commands_queue.put_nowait(Command(10, time.time_ns(), command, update_properties))
+    for group, group_state_updates in groups:
+      command = {
+          'properties': [{
+              'property': {
+                  'base_type': self._properties.get_base_type(name),
+                  'name': name,
+                  'value': value.value if isinstance(value, enum.Enum) else value,
+                  'id': ''.join(random.choices(string.ascii_letters + string.digits, k=8)),
+              }
+          } for name, value in group.items()]
+      }
+
+      def update_properties(state_updates=group_state_updates):
+        for name, value in state_updates.items():
+          self.update_property(name, value)
+
+      self.commands_queue.put_nowait(Command(10, time.time_ns(), command, update_properties))
     self._queue_listener()
 
   def set_work_mode(self, setting: AcWorkMode) -> None:

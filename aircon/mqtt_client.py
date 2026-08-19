@@ -5,12 +5,14 @@ import logging
 import paho.mqtt.client as mqtt
 
 from .aircon import Device
-from .properties import AcWorkMode, FglOperationMode
+from .properties import AcWorkMode, FglOperationMode, Power
 
 
 class MqttClient(mqtt.Client):
 
   _SETTINGS_DEBOUNCE_SECONDS = 0.2
+  _POWER_ON_DELAY_SECONDS = 2.0
+  _MODE_FAN_RETRY_SECONDS = 2.0
   _BATCHABLE_SETTINGS = {
       't_backlight',
       't_fan_leftright',
@@ -79,7 +81,9 @@ class MqttClient(mqtt.Client):
     updates = {prop_name: value}
     if prop_name == 't_work_mode':
       updates = ({'t_power': 'OFF'} if value == 'OFF'
-                 else {'t_power': 'ON', 't_work_mode': value})
+                 else ({'t_power': 'ON', 't_work_mode': value}
+                       if device.get_power() == Power.OFF
+                       else {'t_work_mode': value}))
 
     pending = self._pending_settings.setdefault(device.mac_address, {})
     pending.update(updates)
@@ -92,10 +96,25 @@ class MqttClient(mqtt.Client):
   def _flush_settings(self, device: Device) -> None:
     self._settings_handles.pop(device.mac_address, None)
     settings = self._pending_settings.pop(device.mac_address)
+    if (settings.get('t_power') == 'ON' and device.get_power() == Power.OFF and
+        len(settings) > 1):
+      self._queue_settings(device, {'t_power': 'ON'})
+      remaining = {name: value for name, value in settings.items() if name != 't_power'}
+      self._event_loop.call_later(
+          self._POWER_ON_DELAY_SECONDS, self._queue_settings, device, remaining)
+      return
+    self._queue_settings(device, settings)
+
+  def _queue_settings(self, device: Device, settings: dict, retry_mode_fan: bool = True) -> None:
     try:
       device.queue_settings(settings)
     except Exception:
       logging.exception('Failed to queue combined settings for %s', device.mac_address)
+      return
+    if (retry_mode_fan and 't_fan_speed' in settings and
+        settings.get('t_work_mode') not in (None, device.get_work_mode().name)):
+      self._event_loop.call_later(
+          self._MODE_FAN_RETRY_SECONDS, self._queue_settings, device, settings, False)
 
   @staticmethod
   def _queue_command(device: Device, prop_name: str, value) -> None:
