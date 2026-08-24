@@ -243,7 +243,8 @@ class AcDevice(Device):
         'power': 't_power',
         'swing_mode': 't_fan_power',
         'swing_horizontal_mode': 't_fan_leftright',
-        'temp': 't_temp'
+        'temp': 't_temp',
+        'sleep': 't_sleep'
     }
     self.work_modes = ['off', 'fan_only', 'heat', 'cool', 'dry', 'auto']
     self.fan_modes = ['auto', 'lower', 'low', 'medium', 'high', 'higher']
