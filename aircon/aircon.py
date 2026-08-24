@@ -7,7 +7,7 @@ import re
 import string
 import threading
 import time
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, Iterable, List, Optional
 import queue
 from Crypto.Cipher import AES
 
@@ -207,13 +207,23 @@ class Device(object):
   def _convert_to_control_value(self, name: str, value) -> int:
     raise NotImplementedError()
 
-  def queue_status(self) -> None:
-    for data_field in fields(self._properties):
+  def hot_properties(self) -> Iterable[str]:
+    """The properties Home Assistant actually shows, so worth refreshing often.
+
+    Everything else is fault flags and diagnostics that can wait for the full
+    sweep. Derived from self.topics so it cannot drift from what we publish.
+    """
+    return tuple(self.topics.values())
+
+  def queue_status(self, names: Optional[Iterable[str]] = None) -> None:
+    if names is None:
+      names = [data_field.name for data_field in fields(self._properties)]
+    for name in names:
       command = {
           'cmds': [{
               'cmd': {
                   'method': 'GET',
-                  'resource': 'property.json?name=' + data_field.name,
+                  'resource': 'property.json?name=' + name,
                   'uri': '/local_lan/property/datapoint.json',
                   'data': '',
                   'cmd_id': self._next_command_id,

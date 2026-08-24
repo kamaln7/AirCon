@@ -36,15 +36,26 @@ from .query_handlers import QueryHandlers
 
 
 async def query_status_device(device: Device):
+  # The AC only calls back when we have a command queued for it, so these
+  # sweeps are the only thing that refreshes state. A full sweep is ~45
+  # properties, of which roughly half are fault flags that sit at zero for
+  # years; polling all of them is why room temperature was ten minutes stale.
   _STATUS_UPDATE_INTERVAL = 600.0
+  _HOT_STATUS_UPDATE_INTERVAL = 60.0
   _WAIT_FOR_EMPTY_QUEUE = 10.0
+  sweeps_per_full_update = int(_STATUS_UPDATE_INTERVAL // _HOT_STATUS_UPDATE_INTERVAL)
+  sweep = 0
   while True:
     # In case the AC is stuck, and not fetching commands, avoid flooding
     # the queue with status updates.
     while device.commands_queue.qsize() > 10:
       await asyncio.sleep(_WAIT_FOR_EMPTY_QUEUE)
-    device.queue_status()
-    await asyncio.sleep(_STATUS_UPDATE_INTERVAL)
+    if sweep % sweeps_per_full_update == 0:
+      device.queue_status()
+    else:
+      device.queue_status(device.hot_properties())
+    sweep += 1
+    await asyncio.sleep(_HOT_STATUS_UPDATE_INTERVAL)
 
 
 async def query_status_worker(devices: [Device]):
