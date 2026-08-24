@@ -145,7 +145,7 @@ class AcDeviceSettingsTest(unittest.TestCase):
         'lanip_key': 'test-key',
         'lanip_key_id': 1,
     }
-    self.device = AcDevice(config, lambda: None)
+    self.device = AcDevice(config, lambda device: None)
     self.device.update_property('t_temp', 72)
 
   def pop_command(self, settings):

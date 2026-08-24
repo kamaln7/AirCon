@@ -33,7 +33,7 @@ class Device(object):
   _FGLB_DEVICES = re.compile(r'AP-WB\dE')
   _HUMI_DEVICES = re.compile(r'0001-0401-000[12]')
 
-  def __init__(self, config: Dict[str, str], properties: Properties, notifier: Callable[[None],
+  def __init__(self, config: Dict[str, str], properties: Properties, notifier: Callable[['Device'],
                                                                                         None]):
     self.name = config['name']
     self.app = config['app']
@@ -48,6 +48,9 @@ class Device(object):
     self._properties_lock = threading.RLock()
     self._queue_listener = notifier
     self._available = None
+    # Last time the AC opened a connection back to us. Seeded at startup so a
+    # freshly started bridge gets one _CALLBACK_TIMEOUT of grace.
+    self.last_callback = time.time()
     self.topics = {}
     self.work_modes = []
     self.fan_modes = []
@@ -64,7 +67,7 @@ class Device(object):
     self._property_change_listeners = []  # type List[Callable[[str, Any], None]]
 
   @classmethod
-  def create(cls, config: Dict[str, str], notifier: Callable[[None], None]):
+  def create(cls, config: Dict[str, str], notifier: Callable[['Device'], None]):
     model = config['model']
     if cls._FGL_DEVICES.fullmatch(model):
       return FglDevice(config, notifier)
@@ -186,7 +189,7 @@ class Device(object):
     # Add as a high priority command.
     self.commands_queue.put_nowait(Command(10, time.time_ns(), command, property_updater))
 
-    self._queue_listener()
+    self._queue_listener(self)
 
   def _build_command(self, name: str, data_value: int):
     base_type = self._properties.get_base_type(name)
@@ -220,7 +223,7 @@ class Device(object):
       self._next_command_id += 1
       # Add as a lower-priority command.
       self.commands_queue.put_nowait(Command(100, time.time_ns(), command, None))
-    self._queue_listener()
+    self._queue_listener(self)
 
   def update_key(self, key: dict) -> dict:
     return self._config.update(key)
@@ -234,7 +237,7 @@ class Device(object):
 
 class AcDevice(Device):
 
-  def __init__(self, config: Dict[str, str], notifier: Callable[[None], None]):
+  def __init__(self, config: Dict[str, str], notifier: Callable[['Device'], None]):
     super().__init__(config, AcProperties(), notifier)
     self.topics = {
         'env_temp': 'f_temp_in',
@@ -416,7 +419,7 @@ class AcDevice(Device):
           self.update_property(name, value)
 
       self.commands_queue.put_nowait(Command(10, time.time_ns(), command, update_properties))
-    self._queue_listener()
+    self._queue_listener(self)
 
   def set_work_mode(self, setting: AcWorkMode) -> None:
     control = self.get_property('t_control_value')
@@ -637,7 +640,7 @@ class AcDevice(Device):
 
 class FglDevice(Device):
 
-  def __init__(self, config: Dict[str, str], notifier: Callable[[None], None]):
+  def __init__(self, config: Dict[str, str], notifier: Callable[['Device'], None]):
     super().__init__(config, FglProperties(), notifier)
     self.topics = {
         'fan_speed': 'fan_speed',
@@ -651,7 +654,7 @@ class FglDevice(Device):
 
 class FglBDevice(Device):
 
-  def __init__(self, config: Dict[str, str], notifier: Callable[[None], None]):
+  def __init__(self, config: Dict[str, str], notifier: Callable[['Device'], None]):
     super().__init__(config, FglBProperties(), notifier)
     self.topics = {
         'fan_speed': 'fan_speed',
@@ -664,6 +667,6 @@ class FglBDevice(Device):
 
 class HumidifierDevice(Device):
 
-  def __init__(self, config: Dict[str, str], notifier: Callable[[None], None]):
+  def __init__(self, config: Dict[str, str], notifier: Callable[['Device'], None]):
     super().__init__(config, HumidifierProperties(), notifier)
     self.topics = {'env_temp': 'temp', 'power': 'switch'}

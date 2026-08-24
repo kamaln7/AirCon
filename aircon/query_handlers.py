@@ -23,6 +23,21 @@ class QueryHandlers:
     for device in devices:
       self._devices_map[device.ip_address] = device
 
+  def _calling_device(self, request: web.Request) -> Device:
+    """The device that opened this connection, identified by TCP source address.
+
+    Reaching us at all is the only proof that a unit is really usable, so this is
+    where availability is turned on; the keep-alive loop turns it off again if a
+    unit goes quiet.
+    """
+    device = self._devices_map.get(request.remote)
+    if device is None:
+      logging.warning('Request from unknown address %s; is its IP address stale?', request.remote)
+      raise web.HTTPNotFound(reason=f'Unknown device {request.remote}')
+    device.last_callback = time.time()
+    device.available = True
+    return device
+
   async def key_exchange_handler(self, request: web.Request) -> web.Response:
     """Handles a key exchange.
     Accepts the AC's random and time and pass its own.
@@ -39,7 +54,7 @@ class QueryHandlers:
       if key['ver'] != 1 or key['proto'] != 1 or key.get('sec'):
         logging.error(f'Invalid key exchange: {data}')
         raise web.HTTPBadRequest(reason=f'Invalid key exchange: {data}')
-      updated_keys = self._devices_map[request.remote].update_key(key)
+      updated_keys = self._calling_device(request).update_key(key)
     except KeyIdReplaced as e:
       logging.error(f'{e.title}\n{e.message}')
       return web.Response(status=HTTPStatus.NOT_FOUND.value, reason=f'{e.title}\n{e.message}')
@@ -51,7 +66,7 @@ class QueryHandlers:
     builds the JSON, encrypts and signs it, and sends it to the AC.
     """
     command = {}
-    device = self._devices_map[request.remote]
+    device = self._calling_device(request)
     command['seq_no'] = device.get_command_seq_no()
     try:
       command_entry = device.commands_queue.get_nowait()
@@ -66,7 +81,7 @@ class QueryHandlers:
     """Handles a property update request.
     Decrypts, validates, and pushes the value into the local properties store.
     """
-    device = self._devices_map[request.remote]
+    device = self._calling_device(request)
     post_data = await request.text()
     data = json.loads(post_data)
     try:
