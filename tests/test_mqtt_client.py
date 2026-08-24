@@ -15,6 +15,7 @@ class FakeDevice:
   def __init__(self):
     self.commands = []
     self.settings = []
+    self.status_reads = []
     self.power = Power.OFF
     self.work_mode = AcWorkMode.COOL
 
@@ -29,6 +30,9 @@ class FakeDevice:
 
   def queue_settings(self, settings):
     self.settings.append(settings)
+
+  def queue_status(self, names=None):
+    self.status_reads.append(tuple(names) if names is not None else None)
 
 
 class Message:
@@ -124,6 +128,29 @@ class MqttClientTest(unittest.IsolatedAsyncioTestCase):
     with self.assertRaises(asyncio.CancelledError):
       await task
     self.assertTrue(network_loop.stopped)
+
+  async def test_settings_are_read_back_to_catch_silent_rejection(self):
+    # The AC never reports what it did with a write, so we ask.
+    self.client._VERIFY_SETTINGS_SECONDS = 0.05
+    self.device.power = Power.ON
+    self.client.mqtt_on_message(None, None, Message('t_temp', '71.6'))
+
+    await asyncio.sleep(0.5)
+    self.assertEqual([{'t_temp': '71.6'}], self.device.settings)
+    # Only the property we wrote, never a full 45-property sweep.
+    self.assertEqual([('t_temp',)], self.device.status_reads)
+
+  async def test_a_second_change_replaces_the_pending_read(self):
+    self.client._VERIFY_SETTINGS_SECONDS = 0.3
+    self.device.power = Power.ON
+    self.client.mqtt_on_message(None, None, Message('t_temp', '71.6'))
+    await asyncio.sleep(0.25)
+    self.assertEqual([], self.device.status_reads)  # still pending
+    self.client.mqtt_on_message(None, None, Message('t_temp', '68.0'))
+
+    await asyncio.sleep(0.8)
+    # Rescheduled rather than stacked, so one read covers both writes.
+    self.assertEqual([('t_temp',)], self.device.status_reads)
 
   async def test_non_batchable_command_returns_to_event_loop(self):
     self.client.mqtt_on_message(None, None, Message('t_eco', 'on'))

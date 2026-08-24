@@ -13,6 +13,11 @@ class MqttClient(mqtt.Client):
   _SETTINGS_DEBOUNCE_SECONDS = 0.2
   _POWER_ON_DELAY_SECONDS = 2.0
   _MODE_FAN_RETRY_SECONDS = 2.0
+  # The AC never reports back what it did with a setting, so Home Assistant
+  # would otherwise show our optimistic guess until the next status sweep.
+  # Read the properties we just wrote back, long enough after that the unit
+  # has acted on them.
+  _VERIFY_SETTINGS_SECONDS = 5.0
   _BATCHABLE_SETTINGS = {
       't_backlight',
       't_fan_leftright',
@@ -31,6 +36,7 @@ class MqttClient(mqtt.Client):
     self._event_loop = asyncio.get_running_loop()
     self._pending_settings = {}
     self._settings_handles = {}
+    self._verify_handles = {}
 
     self.on_connect = self.mqtt_on_connect
     self.on_message = self.mqtt_on_message
@@ -111,10 +117,32 @@ class MqttClient(mqtt.Client):
     except Exception:
       logging.exception('Failed to queue combined settings for %s', device.mac_address)
       return
+    self._verify_settings_later(device, settings)
     if (retry_mode_fan and 't_fan_speed' in settings and
         settings.get('t_work_mode') not in (None, device.get_work_mode().name)):
       self._event_loop.call_later(
           self._MODE_FAN_RETRY_SECONDS, self._queue_settings, device, settings, False)
+
+  def _verify_settings_later(self, device: Device, settings: dict) -> None:
+    """Ask the AC what these properties actually ended up as.
+
+    It silently clamps or ignores some writes -- the mode/fan retry above
+    exists because of one such case -- and it only volunteers state when we
+    have something queued for it. Without this the optimistic value stands
+    until the next sweep.
+    """
+    handle = self._verify_handles.pop(device.mac_address, None)
+    if handle:
+      handle.cancel()
+    self._verify_handles[device.mac_address] = self._event_loop.call_later(
+        self._VERIFY_SETTINGS_SECONDS, self._verify_settings, device, tuple(settings))
+
+  def _verify_settings(self, device: Device, names: tuple) -> None:
+    self._verify_handles.pop(device.mac_address, None)
+    try:
+      device.queue_status(names)
+    except Exception:
+      logging.exception('Failed to queue verification read for %s', device.mac_address)
 
   @staticmethod
   def _queue_command(device: Device, prop_name: str, value) -> None:
