@@ -3,6 +3,7 @@ from dataclasses import fields
 import enum
 import logging
 import paho.mqtt.client as mqtt
+import sys
 
 from .aircon import Device
 from .properties import AcWorkMode, FglOperationMode, Power
@@ -29,6 +30,10 @@ class MqttClient(mqtt.Client):
       't_work_mode',
   }
 
+  # The broker retry delay doubles from the minimum to the maximum, forever.
+  _RECONNECT_MIN_DELAY_SECONDS = 1
+  _RECONNECT_MAX_DELAY_SECONDS = 30
+
   def __init__(self, client_id: str, mqtt_topics: dict, devices: [Device]):
     super().__init__(client_id=client_id, clean_session=True)
     self._mqtt_topics = mqtt_topics
@@ -37,11 +42,55 @@ class MqttClient(mqtt.Client):
     self._pending_settings = {}
     self._settings_handles = {}
     self._verify_handles = {}
+    self._broker = None
+    # Retained Home Assistant discovery configs (topic -> JSON payload),
+    # published on every connection: the broker may have lost them.
+    self.discovery_configs = {}
 
+    self.reconnect_delay_set(min_delay=self._RECONNECT_MIN_DELAY_SECONDS,
+                             max_delay=self._RECONNECT_MAX_DELAY_SECONDS)
     self.on_connect = self.mqtt_on_connect
+    self.on_connect_fail = self.mqtt_on_connect_fail
+    self.on_disconnect = self.mqtt_on_disconnect
     self.on_message = self.mqtt_on_message
 
+  def connect_to_broker(self, host: str, port: int) -> None:
+    """Connect once the network loop runs, retrying with backoff until it works.
+
+    Returns at once, so the broker being down or restarting at start never
+    stops the program: the loop thread started by loop_start() makes the
+    attempts (paho's loop_start retries the first connection, and reconnects
+    after a lost one, the same way) and on_connect publishes the state.
+    """
+    self._broker = f'{host}:{port}'
+    self.connect_async(host, port)
+
+  def mqtt_on_connect_fail(self, client: mqtt.Client, userdata):
+    # Called by paho from its except block, so the cause is the active exception.
+    logging.warning('Cannot connect to the MQTT broker %s: %r; retrying, backing off up to %s s',
+                    self._broker,
+                    sys.exc_info()[1],
+                    self._RECONNECT_MAX_DELAY_SECONDS)
+
+  def mqtt_on_disconnect(self, client: mqtt.Client, userdata, rc):
+    if rc != 0:
+      logging.warning('Lost the connection to the MQTT broker %s (rc=%s); reconnecting',
+                      self._broker, rc)
+
   def mqtt_on_connect(self, client: mqtt.Client, userdata, flags, rc):
+    if rc != 0:
+      logging.warning('The MQTT broker %s refused the connection (rc=%s); retrying', self._broker,
+                      rc)
+      return
+    logging.info('Connected to the MQTT broker %s', self._broker)
+
+    # A session is clean, so the broker has forgotten the subscriptions, and a
+    # restarted broker may have lost the retained messages too: send everything
+    # a fresh start sends.
+    client.publish(self._mqtt_topics['lwt'], payload='online', retain=True)
+    for topic, payload in self.discovery_configs.items():
+      client.publish(topic, payload=payload, retain=True)
+
     for device in self._devices:
       client.subscribe([(self._mqtt_topics['sub'].format(device.mac_address, data_field.name), 0)
                         for data_field in fields(device.get_all_properties())])
@@ -50,12 +99,16 @@ class MqttClient(mqtt.Client):
 
     # Publish current status of all properties for available devices.
     for device in self._devices:
+      self.mqtt_publish_update(device.mac_address,
+                               'available',
+                               'online' if device.available else 'offline',
+                               retain=True)
       if device.available:
-        for prop_name in fields(device.get_all_properties()):
-          self.mqtt_publish_update(device.mac_address,
-                                   prop_name,
-                                   device.get_property(prop_name),
-                                   retain=True)
+        properties = device.get_all_properties()
+        for data_field in fields(properties):
+          value = getattr(properties, data_field.name, None)
+          if value is not None:
+            self.mqtt_publish_update(device.mac_address, data_field.name, value, retain=True)
 
   def mqtt_on_message(self, client: mqtt.Client, userdata, message: mqtt.MQTTMessage):
     logging.info('MQTT message Topic: {}, Payload {}'.format(message.topic, message.payload))

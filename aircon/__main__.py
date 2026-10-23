@@ -208,7 +208,9 @@ async def mqtt_loop(mqtt_client: MqttClient):
   try:
     await asyncio.Future()
   finally:
-    mqtt_client.loop_stop()
+    # Joins the network thread: at most a second while it waits to retry the
+    # broker, so keep it off the event loop that drains the HTTP server.
+    await asyncio.to_thread(mqtt_client.loop_stop)
 
 
 async def run(parsed_args):
@@ -237,8 +239,9 @@ async def run(parsed_args):
     if parsed_args.mqtt_user:
       mqtt_client.username_pw_set(*parsed_args.mqtt_user.split(':', 1))
     mqtt_client.will_set(mqtt_topics['lwt'], payload='offline', retain=True)
-    mqtt_client.connect(parsed_args.mqtt_host, parsed_args.mqtt_port)
-    mqtt_client.publish(mqtt_topics['lwt'], payload='online', retain=True)
+    # Connects (and keeps retrying) from the network loop that mqtt_loop starts.
+    # on_connect publishes the LWT, the discovery configs and the statuses.
+    mqtt_client.connect_to_broker(parsed_args.mqtt_host, parsed_args.mqtt_port)
     for device in devices:
       config = {
           'unique_id': device.mac_address,
@@ -309,9 +312,8 @@ async def run(parsed_args):
         config['preset_mode_value_template'] = (
             "{{ {'stop': 'none', 'one': 'Sleep 1', 'two': 'Sleep 2', "
             "'three': 'Sleep 3', 'four': 'Sleep 4'}.get(value, value) }}")
-      mqtt_client.publish(mqtt_topics['discovery'].format(device.mac_address),
-                          payload=json.dumps(config),
-                          retain=True)
+      mqtt_client.discovery_configs[mqtt_topics['discovery'].format(
+          device.mac_address)] = json.dumps(config)
       device.add_property_change_listener(mqtt_client.mqtt_publish_update)
 
   async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(connect=5.0)) as session:
