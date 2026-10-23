@@ -1,9 +1,11 @@
 import asyncio
+import sys
 import threading
 import unittest
+from unittest import mock
 
 from aircon import control_value
-from aircon.__main__ import mqtt_loop
+from aircon.__main__ import ParseArguments, mqtt_loop
 from aircon.aircon import AcDevice
 from aircon.mqtt_client import MqttClient
 from aircon.properties import AcWorkMode, Dimmer, FanSpeed, Power, SleepMode
@@ -156,6 +158,25 @@ class MqttClientTest(unittest.IsolatedAsyncioTestCase):
     self.client.mqtt_on_message(None, None, Message('t_eco', 'on'))
     await asyncio.sleep(0)
     self.assertEqual([('t_eco', 'ON')], self.device.commands)
+
+
+class ClientIdTest(unittest.IsolatedAsyncioTestCase):
+
+  def _parse(self, *extra):
+    argv = ['aircon', 'run', '--port', '1', '--mqtt_host', 'broker', '--config', 'c.json', *extra]
+    with mock.patch.object(sys, 'argv', argv):
+      return ParseArguments()
+
+  def test_the_default_client_id_is_fixed(self):
+    self.assertEqual('aircon', self._parse().mqtt_client_id)
+
+  def test_the_client_id_can_be_set(self):
+    self.assertEqual('other', self._parse('--mqtt_client_id', 'other').mqtt_client_id)
+
+  async def test_the_client_id_reaches_paho_with_a_clean_session(self):
+    client = MqttClient(self._parse().mqtt_client_id, {}, [])
+    self.assertEqual(b'aircon', client._client_id)
+    self.assertTrue(client._clean_session)
 
 
 class AcDeviceSettingsTest(unittest.TestCase):

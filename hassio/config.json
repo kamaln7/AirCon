@@ -35,6 +35,7 @@
     "log_level": "list(CRITICAL|ERROR|WARNING|INFO|DEBUG)?",
     "mqtt_host": "str?",
     "mqtt_port": "port?",
+    "mqtt_client_id": "str?",
     "mqtt_user": "str?",
     "mqtt_pass": "str?",
     "port": "port",

@@ -58,6 +58,7 @@ Use this method if not using HomeAssistant, or if you prefer to set it up outsid
      These will be used to discover you A/Cs and get their LAN keys, if there are no config files in the config directory (`/opt/hisense`).
    - Set `mqtt_host` to the [MQTT] broker server, use `localhost` if running on the same host.
      Leave blank if not using [MQTT].
+   - Set `mqtt_client_id` to the MQTT client ID. Optional, default is `aircon`.
    - Set `mqtt_user` and `mqtt_pass` to the MQTT credentials. Leave null (or drop) if no authentication is used.
    - Set `port` to the port to be used by the web server.
    - Set `log_level` to your desired verbosity level.
@@ -107,7 +108,7 @@ Use this method if the docker setup above does not work for you.
    - `--config` - The config file with the credentials to connect to the A/C.
    - `--mqtt_host` - The MQTT broker hostname or IP address. Must be set to enable MQTT.
    - `--mqtt_port` - The MQTT broker port. Default is 1883.
-   - `--mqtt_client_id` - The MQTT client ID. If not set, a random client ID will be generated.
+   - `--mqtt_client_id` - The MQTT client ID. Default is &quot;aircon&quot;.
    - `--mqtt_user` - &lt;user:password&gt; for the MQTT channel. If not set, no authentication is used.
    - `--mqtt_topic` - The MQTT root topic. Default is &quot;hisense_ac&quot;. The server will listen on topics
      &lt;{mqtt_topic}/{property_name}/command&gt; and publish to &lt;{mqtt_topic}/{property_name}/status&gt;.

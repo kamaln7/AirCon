@@ -22,6 +22,7 @@
        code: App code
    log_level: One of DEBUG, INFO, WARNING, ERROR, CRITICAL. Default is INFO.
    mqtt_host: IP address (or localhost).
+   mqtt_client_id: MQTT client ID. Default is aircon.
    mqtt_user: User name for MQTT server. Remove if no authentication is used.
    mqtt_pass: Password for MQTT server. Remove if no authentication is used.
    port: Port number for the web server.

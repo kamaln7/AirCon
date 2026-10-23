@@ -6,6 +6,7 @@ TYPE=$(jq -r '.type // "ac"' $OPTIONS_FILE)
 LOG_LEVEL=$(jq -r '.log_level | ascii_upcase // "WARNING"' $OPTIONS_FILE)
 MQTT_HOST=$(jq -r '.mqtt_host // ""' $OPTIONS_FILE)
 MQTT_PORT=$(jq -r '.mqtt_port // 1883' $OPTIONS_FILE)
+MQTT_CLIENT_ID=$(jq -r '(.mqtt_client_id // "") | if . == "" then "aircon" else . end' $OPTIONS_FILE)
 MQTT_USER=$(jq -r 'if (.mqtt_user and .mqtt_pass) then (.mqtt_user + ":" + .mqtt_pass) else "" end' $OPTIONS_FILE)
 APPS=$(jq -r '.app | length // 0' $OPTIONS_FILE)
 LOCAL_IP=$(jq -r 'if (.local_ip) then (.local_ip) else "" end' $OPTIONS_FILE)
@@ -26,4 +27,4 @@ for i in $(find $CONFIG_DIR -maxdepth 1 -type f -name "config_*.json" -exec base
   do configs="$configs --config $CONFIG_DIR/$i --type $TYPE"
 done
 # exec: python is the container's PID 1 and receives the runtime's SIGTERM itself.
-exec python -m aircon --log_level $LOG_LEVEL run --port $PORT --mqtt_host "$MQTT_HOST" --mqtt_port $MQTT_PORT --mqtt_user "$MQTT_USER" --local_ip "$LOCAL_IP" $configs
+exec python -m aircon --log_level $LOG_LEVEL run --port $PORT --mqtt_host "$MQTT_HOST" --mqtt_port $MQTT_PORT --mqtt_client_id "$MQTT_CLIENT_ID" --mqtt_user "$MQTT_USER" --local_ip "$LOCAL_IP" $configs

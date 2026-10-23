@@ -91,7 +91,9 @@ def ParseArguments() -> argparse.Namespace:
   group_mqtt = parser_run.add_argument_group('MQTT', 'Settings related to the MQTT')
   group_mqtt.add_argument('--mqtt_host', default=None, help='MQTT broker hostname or IP address.')
   group_mqtt.add_argument('--mqtt_port', type=int, default=1883, help='MQTT broker port.')
-  group_mqtt.add_argument('--mqtt_client_id', default=None, help='MQTT client ID.')
+  group_mqtt.add_argument('--mqtt_client_id',
+                          default='aircon',
+                          help='MQTT client ID. Fixed, so a restart takes over its own session.')
   group_mqtt.add_argument('--mqtt_user', default=None, help='<user:password> for the MQTT channel.')
   group_mqtt.add_argument('--mqtt_topic', default='hisense_ac', help='MQTT topic.')
   group_mqtt.add_argument('--mqtt_discovery_prefix',
