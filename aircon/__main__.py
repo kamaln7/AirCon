@@ -164,6 +164,9 @@ def setup_logger(log_level, use_stderr=False):
   logger.addHandler(logging_handler)
 
 
+_HTTP_SHUTDOWN_TIMEOUT = 5.0
+
+
 async def setup_and_run_http_server(parsed_args, devices: [Device]):
   query_handlers = QueryHandlers(devices)
   app = web.Application()
@@ -187,10 +190,17 @@ async def setup_and_run_http_server(parsed_args, devices: [Device]):
       # '/local_lan/regtoken.json': query_handlers.module_request_handler,
       # '/local_lan/wifi_stop_ap.json': query_handlers.module_request_handler
   ])
-  runner = web.AppRunner(app)
+  # Handlers answer in milliseconds; this only bounds a stuck connection on
+  # the way out, inside a container runtime's 10 s stop grace.
+  runner = web.AppRunner(app, shutdown_timeout=_HTTP_SHUTDOWN_TIMEOUT)
   await runner.setup()
-  site = web.TCPSite(runner, port=parsed_args.port)
-  await site.start()
+  try:
+    site = web.TCPSite(runner, port=parsed_args.port)
+    await site.start()
+    await asyncio.Future()
+  finally:
+    # Stop accepting, let requests in flight finish, close the rest.
+    await runner.cleanup()
 
 
 async def mqtt_loop(mqtt_client: MqttClient):
@@ -305,8 +315,27 @@ async def run(parsed_args):
       device.add_property_change_listener(mqtt_client.mqtt_publish_update)
 
   async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(connect=5.0)) as session:
-    await asyncio.gather(mqtt_loop(mqtt_client), setup_and_run_http_server(parsed_args, devices),
-                         query_status_worker(devices), notifier.start(session))
+    work = asyncio.gather(mqtt_loop(mqtt_client), setup_and_run_http_server(parsed_args, devices),
+                          query_status_worker(devices), notifier.start(session))
+    # As PID 1 in a container, a process gets no default action for SIGTERM:
+    # without a handler it is ignored until the runtime SIGKILLs it. Cancelling
+    # the work runs each part's cleanup (MQTT loop stopped, HTTP server
+    # drained, session closed) and returns, so the process exits 0.
+    stopping = asyncio.Event()
+
+    def stop():
+      logging.warning('Stopping on signal')
+      stopping.set()
+      work.cancel()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+      loop.add_signal_handler(sig, stop)
+    try:
+      await work
+    except asyncio.CancelledError:
+      if not stopping.is_set():
+        raise
 
 
 def _escape_name(name: str):
