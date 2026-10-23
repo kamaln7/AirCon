@@ -3,6 +3,7 @@ from aiohttp import web
 import argparse
 import asyncio
 import base64
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.client import HTTPConnection, InvalidURL
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -115,8 +116,29 @@ def ParseArguments() -> argparse.Namespace:
   return arg_parser.parse_args()
 
 
+class JsonFormatter(logging.Formatter):
+  """One JSON object per record, for a container's log collector.
+
+  Everything goes to stderr, so a collector can't tell a warning from an info
+  line by the stream; the level is a field. A traceback stays in `message`
+  with its newlines, so it is one record, not one line per frame.
+  """
+
+  def __init__(self):
+    super().__init__(fmt='%(message)s')
+
+  def format(self, record):
+    return json.dumps({
+        'time': datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+        'level': record.levelname.lower(),
+        'caller': '%s:%d' % (record.filename, record.lineno),
+        'message': super().format(record),
+    })
+
+
 def setup_logger(log_level, use_stderr=False):
-  if use_stderr or os.environ.get('PLATFORM') == 'docker':
+  docker = os.environ.get('PLATFORM') == 'docker'
+  if use_stderr or docker:
     logging_handler = logging.StreamHandler(sys.stderr)
   elif JournalHandler:
     logging_handler = JournalHandler()
@@ -129,11 +151,14 @@ def setup_logger(log_level, use_stderr=False):
     logging_handler = logging.handlers.SysLogHandler()
   else:  # Unknown platform, revert to stderr
     logging_handler = logging.StreamHandler(sys.stderr)
-  logging_handler.setFormatter(
-      logging.Formatter(fmt='{levelname[0]}{asctime}.{msecs:03.0f}  '
-                        '{filename}:{lineno}] {message}',
-                        datefmt='%m%d %H:%M:%S',
-                        style='{'))
+  if docker:
+    logging_handler.setFormatter(JsonFormatter())
+  else:
+    logging_handler.setFormatter(
+        logging.Formatter(fmt='{levelname[0]}{asctime}.{msecs:03.0f}  '
+                          '{filename}:{lineno}] {message}',
+                          datefmt='%m%d %H:%M:%S',
+                          style='{'))
   logger = logging.getLogger()
   logger.setLevel(log_level)
   logger.addHandler(logging_handler)
