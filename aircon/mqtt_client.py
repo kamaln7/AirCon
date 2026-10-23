@@ -94,8 +94,6 @@ class MqttClient(mqtt.Client):
     for device in self._devices:
       client.subscribe([(self._mqtt_topics['sub'].format(device.mac_address, data_field.name), 0)
                         for data_field in fields(device.get_all_properties())])
-    # Subscribe to subscription updates.
-    client.subscribe('$SYS/broker/log/M/subscribe/#')
 
     # Publish current status of all properties for available devices.
     for device in self._devices:
@@ -112,8 +110,6 @@ class MqttClient(mqtt.Client):
 
   def mqtt_on_message(self, client: mqtt.Client, userdata, message: mqtt.MQTTMessage):
     logging.info('MQTT message Topic: {}, Payload {}'.format(message.topic, message.payload))
-    if message.topic.startswith('$SYS/broker/log/M/subscribe'):
-      return self.mqtt_on_subscribe(message.payload)
     mac_address = message.topic.rsplit('/', 3)[1]
     prop_name = message.topic.rsplit('/', 3)[2]
     payload = message.payload.decode('utf-8')
@@ -203,24 +199,6 @@ class MqttClient(mqtt.Client):
       device.queue_command(prop_name, value)
     except Exception:
       logging.exception('Failed to queue value %s for property %s', value, prop_name)
-
-  def mqtt_on_subscribe(self, payload: bytes):
-    # The last segment in the space delimited string is the topic.
-    topic = payload.decode('utf-8').rsplit(' ', 1)[-1]
-    if topic not in self._mqtt_topics['pub']:
-      return
-    mac_address = topic.rsplit('/', 3)[1]
-    prop_name = topic.rsplit('/', 3)[2]
-
-    for device in self._devices:
-      if device.mac_address != mac_address:
-        continue
-      chosen_device = device
-
-    self.mqtt_publish_update(chosen_device.mac_address,
-                             prop_name,
-                             chosen_device.get_property(prop_name),
-                             retain=True)
 
   def mqtt_publish_update(self,
                           mac_address: str,
